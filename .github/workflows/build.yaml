@@ -1,37 +1,42 @@
-name: build
-on:
-  push:
-    branches:
-      - master
-jobs:
-  build:
-    runs-on: [self-hosted, public, linux, x64]
-    steps:
-      - uses: actions/checkout@v2
-        name: Checkout repo
-        with:
-          fetch-depth: 0
-      - name: Run yor action
-        uses: bridgecrewio/yor-action@main
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v1
-        with:
-          python-version: 3.7
-      - name: Update documentation
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git fetch --tags
-          git pull
-          latest_tag=$(git describe --tags `git rev-list --tags --max-count=1`)
-          echo "latest tag: $latest_tag"
-          new_tag=$(echo $latest_tag | awk -F. -v a="$1" -v b="$2" -v c="$3" '{printf("%d.%d.%d", $1+a, $2+b , $3+1)}')
-          echo "new tag: $new_tag"
+name: 'wiz-cli'
+on: [pull_request]
 
-          pip install -U checkov
-          cat .github/template.md > README.md && checkov -d terraform -o github_failed_only -s >> README.md
-          git add README.md  || echo "No changes to commit"
-          git commit -m "update resource scan result doc" README.md || echo "No changes to commit"
-          git push origin
-          git tag $new_tag
-          git push origin $new_tag
+jobs:
+  wiz-cli-iac-scan:
+    name: 'Wiz-cli IaC Scan'
+    runs-on: ubuntu-latest
+    environment: wiz-keys
+    env:
+      SCAN_PATH: "." # Set the relative path in the repo to scan
+      POLICY: "Default IaC policy" # Set the desired Wiz-cli policy to use
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      WIZ_CLIENT_ID: ${{ secrets.WIZ_CLIENT_ID }}
+      WIZ_CLIENT_SECRET: ${{ secrets.WIZ_CLIENT_SECRET }}
+
+    # Use the Bash shell regardless whether the GitHub Actions runner is ubuntu-latest, macos-latest, or windows-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    # Checkout the repository to the GitHub Actions runner
+    - name: Check out repository
+    #  uses: actions/checkout@v2
+      run: |
+        export REPO_PATH="${GITHUB_WORKSPACE}/repo"
+        if [ -d "${REPO_PATH}" ]; then rm -Rf ${REPO_PATH}; fi
+        git clone https://${GITHUB_ACTOR}:${GITHUB_TOKEN}@github.com/AcqSec/wiz_acqsec_terragoat.git ${REPO_PATH}
+        if [ "$GITHUB_EVENT_NAME" == "pull_request" ]; then
+          export GITHUB_SHA=$(cat $GITHUB_EVENT_PATH | jq -r .pull_request.head.sha)
+        fi
+        cd ${REPO_PATH}
+        git checkout ${GITHUB_SHA}
+
+    - name: Download Wiz-cli
+      run: curl -o wizcli https://wizcli.app.wiz.io/wizcli && chmod +x wizcli
+
+    - name: Authenticate to Wiz
+      run: ./wizcli auth --id "$WIZ_CLIENT_ID" --secret "$WIZ_CLIENT_SECRET"
+
+    - name: Run wiz-cli IaC scan
+      run: ./wizcli iac scan --path $SCAN_PATH --policy "$POLICY"
